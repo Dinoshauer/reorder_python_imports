@@ -11,6 +11,8 @@ import tokenize
 
 import six
 from aspy.refactor_imports.import_obj import import_obj_from_str
+from aspy.refactor_imports.import_obj import ImportImport
+from aspy.refactor_imports.import_obj import FromImport
 from aspy.refactor_imports.sort import sort
 
 
@@ -121,7 +123,7 @@ def partition_source(src):
     return chunks
 
 
-def combine_trailing_code_chunks(partitions):
+def combine_trailing_code_chunks(partitions, args):
     chunks = list(partitions)
 
     if chunks and chunks[-1].code_type != CodeType.IMPORT:
@@ -133,12 +135,18 @@ def combine_trailing_code_chunks(partitions):
     return chunks
 
 
-def separate_comma_imports(partitions):
+def separate_comma_imports(partitions, args):
     """Turns `import a, b` into `import a` and `import b`"""
     def _inner():
         for partition in partitions:
             if partition.code_type is CodeType.IMPORT:
                 import_obj = import_obj_from_str(partition.src)
+                if args.group_from_imports:
+                    if isinstance(import_obj, FromImport):
+                        yield CodePartition(
+                            CodeType.IMPORT, import_obj.to_text()
+                        )
+                        continue
                 if import_obj.has_multiple_imports:
                     for new_import_obj in import_obj.split_imports():
                         yield CodePartition(
@@ -148,11 +156,10 @@ def separate_comma_imports(partitions):
                     yield partition
             else:
                 yield partition
-
     return list(_inner())
 
 
-def remove_duplicated_imports(partitions):
+def remove_duplicated_imports(partitions, args):
     def _inner():
         seen = set()
         for partition in partitions:
@@ -166,7 +173,7 @@ def remove_duplicated_imports(partitions):
     return list(_inner())
 
 
-def apply_import_sorting(partitions):
+def apply_import_sorting(partitions, args):
     pre_import_code = []
     imports = []
     trash = []
@@ -226,10 +233,10 @@ STEPS = (
 )
 
 
-def fix_file_contents(contents):
+def fix_file_contents(contents, args):
     partitioned = partition_source(contents)
     for step in STEPS:
-        partitioned = step(partitioned)
+        partitioned = step(partitioned, args)
     return ''.join(part.src for part in partitioned)
 
 
@@ -258,12 +265,16 @@ def main(argv=None):
         '--diff-only', action='store_true',
         help='Show unified diff instead of applying reordering.',
     )
+    parser.add_argument(
+        '--group-from-imports', action='store_true',
+        help='Allow from-imports like `from a import b, c`',
+    )
     args = parser.parse_args(argv)
 
     retv = 0
     for filename in args.filenames:
         contents = io.open(filename).read()
-        new_contents = fix_file_contents(contents)
+        new_contents = fix_file_contents(contents, args)
         if contents != new_contents:
             retv = 1
             if args.diff_only:
